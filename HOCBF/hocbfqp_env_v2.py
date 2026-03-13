@@ -161,7 +161,7 @@ class UnicycleHOCBFEnvRobotarium:
         for j in range(self._num_obs):
             if j < self._num_static_obs:
                 c = self.static_centers[j]
-                R = self.static_radii[j]
+                R = self.static_radii[j]+self.safe_margin
                 c_dot = np.zeros(2)
                 c_ddot = np.zeros(2)
             else:
