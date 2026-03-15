@@ -16,14 +16,14 @@ class UnicycleHOCBFEnvRobotarium:
 
     def __init__(self,
                  dt=0.05,
-                 T_max=50.0,
-                 v_attacker=0.08,
+                 T_max=100.0,
+                 v_attacker=0.05,
                  defender_speed_ratio=0.4,
-                 omega_min=-1.0,
-                 omega_max=1.0,
+                 omega_min=-0.6,
+                 omega_max=0.6,
                  goal=None,
                  goal_tol=0.2,
-                 safe_margin=0.1):
+                 safe_margin=0.05):
 
         self.dt = dt
         self.max_steps = int(T_max / dt)
@@ -260,16 +260,16 @@ class UnicycleHOCBFEnvRobotarium:
             "k1": np.array(k1_vec),
             "k2": np.array(k2_vec),
 
-            "reward": float(reward),
+            "reward": float(reward*0.6),
             "attacker_pos": self.state_a[:2].copy(),
             "defender_pos": self.state_d[:2].copy(),
             "dist_ad": float(dist_ad),
             "success": success,
             "captured": captured,
-            "infeasible_cnt": infeasible_cnt
+            "infeasible_cnt": infeasible_cnt 
         }
 
-        info["r_dist"] = r_dist
-        info["r_time"] = r_time
+        info["r_dist"] = r_dist*0.6
+        info["r_time"] = r_time*0.6
 
         return self._get_obs(), reward, done, info

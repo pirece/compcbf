@@ -300,7 +300,7 @@ def penaltynet_loss(penalty_net, agent, states, u_safe_list,
 # Training Loop
 # ============================================================
 def train_sac_penalty(num_episodes=200,
-                      max_ep_steps=5000,
+                      max_ep_steps=2000,
                       replay_size=int(5e4),
                       start_steps=2000,
                       update_after=1000,
@@ -312,10 +312,10 @@ def train_sac_penalty(num_episodes=200,
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    env = UnicycleHOCBFEnv(T_max=max_ep_steps * 0.01)
+    env = UnicycleHOCBFEnv(T_max=100)
     obs_dim = env.obs_dim
     act_dim = env.act_dim
-    act_limit = 2.0
+    act_limit = 0.9 # 对应env 中的 omega 控制输入范围 [-0.6, 0.6]变小，这个参数主要用于 SAC Actor 的输出缩放，保持在 [-act_limit, act_limit] 内
 
     agent = SACAgent(obs_dim, act_dim, act_limit)
     penalty_net = GaussianPenaltyNet(obs_dim, env.num_obs).to(device)
@@ -398,7 +398,7 @@ def train_sac_penalty(num_episodes=200,
             u_safe_list.append(info.get("omega", float(act[0])))
 
             obs = next_obs
-            ep_ret += r
+            ep_ret += r 
             total_steps += 1
 
             # 4) SAC 更新
@@ -511,4 +511,4 @@ def train_sac_penalty(num_episodes=200,
 
 
 if __name__ == "__main__":
-    env, agent, penalty_net, returns = train_sac_penalty(num_episodes=200)
+    env, agent, penalty_net, returns = train_sac_penalty(num_episodes=300)
