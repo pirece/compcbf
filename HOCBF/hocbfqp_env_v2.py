@@ -23,7 +23,7 @@ class UnicycleHOCBFEnvRobotarium:
                  omega_max=0.6,
                  goal=None,
                  goal_tol=0.2,
-                 safe_margin=0.05):
+                 safe_margin=0.1):
 
         self.dt = dt
         self.max_steps = int(T_max / dt)
@@ -83,7 +83,7 @@ class UnicycleHOCBFEnvRobotarium:
     # ---------------------------------------------------------------------
     def reset(self):
         # 优化：攻击者和防守者的初始位置，制造“防守者从后方追击攻击者进入通道”的极限场景
-        self.state_a = np.array([-1.2, -0.8, 2.5*np.pi/15, 0.0], float)
+        self.state_a = np.array([-1.2, -0.8, 1*np.pi/5, 0.0], float)
         self.state_d = np.array([0.0, 0.0, -5 * np.pi / 6.0, 0.0], float) 
         self.step_count = 0
 

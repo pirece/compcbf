@@ -251,7 +251,7 @@ class GaussianPenaltyNet(nn.Module):
 
 
 # ============================================================
-# PenaltyNet 任务驱动 Loss（不使用 H、omega_hat、psi2_min）
+# PenaltyNet 任务驱动 Loss
 # ============================================================
 def penaltynet_loss(penalty_net, agent, states, u_safe_list,
                     lambda_Q=1.0, lambda_smooth=0.1,
@@ -265,7 +265,6 @@ def penaltynet_loss(penalty_net, agent, states, u_safe_list,
     mu_z, log_std_z = penalty_net(states)
     std_z = torch.exp(log_std_z)
 
-    # 高斯熵公式：0.5 * log(2πeσ^2)
     ent_per_sample = torch.sum(
         0.5 * torch.log(2 * torch.pi * torch.e * std_z**2),
         dim=1
@@ -302,7 +301,7 @@ def penaltynet_loss(penalty_net, agent, states, u_safe_list,
 def train_sac_penalty(num_episodes=200,
                       max_ep_steps=2000,
                       replay_size=int(5e4),
-                      start_steps=2000,
+                      start_steps=8000,
                       update_after=1000,
                       update_every=1,
                       batch_size=64,
@@ -315,7 +314,7 @@ def train_sac_penalty(num_episodes=200,
     env = UnicycleHOCBFEnv(T_max=100)
     obs_dim = env.obs_dim
     act_dim = env.act_dim
-    act_limit = 0.9 # 对应env 中的 omega 控制输入范围 [-0.6, 0.6]变小，这个参数主要用于 SAC Actor 的输出缩放，保持在 [-act_limit, act_limit] 内
+    act_limit = 0.9 
 
     agent = SACAgent(obs_dim, act_dim, act_limit)
     penalty_net = GaussianPenaltyNet(obs_dim, env.num_obs).to(device)
@@ -334,6 +333,14 @@ def train_sac_penalty(num_episodes=200,
     # 奖励分解（episode 平均）
     all_r_dist = []
     all_r_time = []
+
+    # 设置一个乘积系数（可根据需要修改）
+    SCALE_COEF = 1
+    
+    # 获取倒数10轮的起始 episode index
+    save_window_start = max(0, num_episodes - 10)
+    best_return_in_window = -np.inf
+    # -------------------------------------------
 
     print("Start training (HOCBF-QP + task-driven PenaltyNet)...")
 
@@ -366,7 +373,7 @@ def train_sac_penalty(num_episodes=200,
             else:
                 act = agent.select_action(obs, deterministic=False).astype(np.float32)
 
-            # 2) PenaltyNet 输出 HOCBF 参数（k1_vec, k2_vec）
+            # 2) PenaltyNet 输出 HOCBF 参数
             with torch.no_grad():
                 pen_params, _, _ = penalty_net.sample_params(obs_t)
             pen_params_np = pen_params.cpu().numpy().squeeze(0)
@@ -388,13 +395,8 @@ def train_sac_penalty(num_episodes=200,
             ep_r_time_sum += r_time
             ep_step_count += 1
             
-
-            # 每步打印奖励分解
-            #print(f"[Ep {ep:03d} Step {t:04d}] "f"r_dist={r_dist:.3f}, r_time={r_time:.3f}, reward={r:.3f}")
-
             # PenaltyNet 轨迹数据
             state_pen_list.append(obs.copy())
-            # u_safe = QP 输出的实际控制，假设 info["omega"]，若不存在用 act[0]
             u_safe_list.append(info.get("omega", float(act[0])))
 
             obs = next_obs
@@ -429,7 +431,7 @@ def train_sac_penalty(num_episodes=200,
         all_r_dist.append(avg_r_dist)
         all_r_time.append(avg_r_time)
 
-        # ---- PenaltyNet 更新（用整条 episode 序列）----
+        # ---- PenaltyNet 更新 ----
         if len(state_pen_list) > 1:
             states_pen = torch.as_tensor(
                 np.array(state_pen_list, dtype=np.float32),
@@ -457,37 +459,53 @@ def train_sac_penalty(num_episodes=200,
 
         all_pn_loss.append(pn_loss_val)
 
+        # 打印时应用乘积系数
         print(f"[Ep {ep:03d}] "
-              f"Return={ep_ret:.2f}, "
+              f"Return={ep_ret * SCALE_COEF:.2f}, "
               f"Q1={all_q1_loss[-1]:.4f}, Q2={all_q2_loss[-1]:.4f}, "
               f"Pi={all_pi_loss[-1]:.4f}, PN={pn_loss_val:.4f}, "
-              f"r_dist={avg_r_dist:.4f}, r_time={avg_r_time:.4f}, "
+              f"r_dist={avg_r_dist * SCALE_COEF:.4f}, r_time={avg_r_time * SCALE_COEF:.4f}, "
               f"infeasible_cnt={ep_infeasible_cnt:.3f}")
 
-    # ---------- 保存模型 ----------
-    torch.save(agent.actor.state_dict(), "actor_sac_hocbf_att_def_v2.pth")
-    torch.save(agent.q1.state_dict(), "q1_sac_hocbf_att_def_v2.pth")
-    torch.save(agent.q2.state_dict(), "q2_sac_hocbf_att_def_v2.pth")
-    torch.save(penalty_net.state_dict(), "penaltynet_sac_hocbf_att_def_v2.pth")
-    print("Saved actor/q1/q2/penaltynet weights.")
+        # ---------------- 关键修改 2 ----------------
+        # 只有到了倒数10轮之内，才进行最好奖励的判断与模型的覆盖保存
+        if ep >= save_window_start:
+            if ep_ret > best_return_in_window:
+                best_return_in_window = ep_ret
+                
+                torch.save(agent.actor.state_dict(), "actor_sac_hocbf_att_def_v2.pth")
+                torch.save(agent.q1.state_dict(), "q1_sac_hocbf_att_def_v2.pth")
+                torch.save(agent.q2.state_dict(), "q2_sac_hocbf_att_def_v2.pth")
+                torch.save(penalty_net.state_dict(), "penaltynet_sac_hocbf_att_def_v2.pth")
+                
+                print(f"  --> [Saved!] Update best model in last 10 eps! Return = {best_return_in_window * SCALE_COEF:.2f}")
+        # -------------------------------------------
+
+    print(f"Training finished! The best return in the last 10 eps was {best_return_in_window * SCALE_COEF:.2f}.")
+
+    # ---------------- 关键修改 3 ----------------
+    # 修复列表乘以浮点数导致 TypeError 的问题
+    scaled_returns = np.array(all_returns, dtype=np.float64) * SCALE_COEF
+    scaled_r_dist = np.array(all_r_dist, dtype=np.float64) * SCALE_COEF
+    scaled_r_time = np.array(all_r_time, dtype=np.float64) * SCALE_COEF
 
     # ---------- 保存训练日志 ----------
     if HAS_SCIPY:
         sio.savemat("train_log_sac_hocbf_att_def_v2.mat", {
-            "returns": np.array(all_returns, dtype=np.float64),
+            "returns": scaled_returns,
             "q1_loss": np.array(all_q1_loss, dtype=np.float64),
             "q2_loss": np.array(all_q2_loss, dtype=np.float64),
             "pi_loss": np.array(all_pi_loss, dtype=np.float64),
             "pn_loss": np.array(all_pn_loss, dtype=np.float64),
-            "r_dist": np.array(all_r_dist, dtype=np.float64),
-            "r_time": np.array(all_r_time, dtype=np.float64),
+            "r_dist": scaled_r_dist,
+            "r_time": scaled_r_time,
         })
         print("Saved train_log_sac_hocbf_att_def_v2.mat")
 
     # ---------- 画回报曲线 ----------
     episodes = np.arange(len(all_returns))
     plt.figure()
-    plt.plot(episodes, all_returns)
+    plt.plot(episodes, scaled_returns)
     plt.xlabel("Episode")
     plt.ylabel("Return")
     plt.title("Episode Return (HOCBF-QP attacker-defender)")
@@ -496,8 +514,8 @@ def train_sac_penalty(num_episodes=200,
 
     # ---------- 画奖励分解曲线 ----------
     plt.figure()
-    plt.plot(episodes, all_r_dist, label="avg r_dist")
-    plt.plot(episodes, all_r_time, label="avg r_time")
+    plt.plot(episodes, scaled_r_dist, label="avg r_dist")
+    plt.plot(episodes, scaled_r_time, label="avg r_time")
     plt.xlabel("Episode")
     plt.ylabel("Avg reward component per step")
     plt.title("Reward Decomposition (HOCBF-QP)")
@@ -510,5 +528,72 @@ def train_sac_penalty(num_episodes=200,
     return env, agent, penalty_net, all_returns
 
 
+def train_single_run(run_id,
+                     num_episodes=200,
+                     max_ep_steps=2000,
+                     replay_size=int(5e4),
+                     start_steps=8000,
+                     update_after=1000,
+                     update_every=1,
+                     batch_size=64,
+                     pen_lr=3e-5,
+                     seed=0):
+    """
+    单轮训练封装：用于多轮统计训练。
+    """
+    print(f"\n================ RUN {run_id} START ================\n")
+
+    # 每轮使用不同随机种子，保证统计多样性
+    this_seed = seed + run_id
+
+    env, agent, penalty_net, returns = train_sac_penalty(
+        num_episodes=num_episodes,
+        max_ep_steps=max_ep_steps,
+        replay_size=replay_size,
+        start_steps=start_steps,
+        update_after=update_after,
+        update_every=update_every,
+        batch_size=batch_size,
+        pen_lr=pen_lr,
+        seed=this_seed
+    )
+
+    # 保存该轮训练日志（仅回报）
+    if HAS_SCIPY:
+        save_name = f"train_log_hocbf_run{run_id}.mat"
+        sio.savemat(save_name, {"returns": np.array(returns, dtype=np.float64)})
+        print(f"[Saved] {save_name}")
+
+    print(f"\n================ RUN {run_id} END =================\n")
+    return returns
+
+
+def run_multi_training(num_runs=10, num_episodes=200):
+    """
+    多轮训练：返回 shape = (num_runs, num_episodes) 的 all_returns。
+    """
+    all_returns = []
+
+    for r in range(1, num_runs + 1):
+        ret = train_single_run(
+            run_id=r,
+            num_episodes=num_episodes
+        )
+        all_returns.append(ret)
+
+    # 保存所有轮训练结果，供 compare.py 直接读取
+    if HAS_SCIPY:
+        sio.savemat(
+            "train_log_hocbf_all_runs.mat",
+            {"all_returns": np.array(all_returns, dtype=np.float64)}
+        )
+        print("[Saved] train_log_hocbf_all_runs.mat")
+
+    return all_returns
+
+
 if __name__ == "__main__":
-    env, agent, penalty_net, returns = train_sac_penalty(num_episodes=300)
+    # 进行 10 轮完整训练
+    all_returns = run_multi_training(num_runs=10, num_episodes=400)
+
+    print("All runs finished.")
